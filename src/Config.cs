@@ -20,6 +20,11 @@
             /// Full path of the folder to scan.
             /// </summary>
             public string Path { get; set; }
+
+            /// <summary>
+            /// Whether to include subfolders.
+            /// </summary>
+            public bool? IncludeSubfolders { get; set; }
         }
 
         public class DatabaseConfig

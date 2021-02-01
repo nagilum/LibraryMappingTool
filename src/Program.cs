@@ -274,7 +274,10 @@ namespace lmt
                     throw new FileNotFoundException($"Folder does not exist: {folder.Path}");
                 }
 
-                files = Directory.GetFiles(folder.Path, "*.dll", SearchOption.AllDirectories);
+                files = folder.IncludeSubfolders.HasValue &&
+                        folder.IncludeSubfolders.Value
+                    ? Directory.GetFiles(folder.Path, "*.dll", SearchOption.AllDirectories)
+                    : Directory.GetFiles(folder.Path, "*.dll", SearchOption.TopDirectoryOnly);
             }
             catch (Exception ex)
             {
