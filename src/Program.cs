@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net.NetworkInformation;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using lmt.db;
 using lmt.db.tables;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +28,16 @@ namespace lmt
         /// Database connection.
         /// </summary>
         private static DatabaseContext Db { get; set; }
+
+        /// <summary>
+        /// A list of all packages.
+        /// </summary>
+        private static List<Package> Packages { get; set; }
+
+        /// <summary>
+        /// A list of all bad package versions.
+        /// </summary>
+        private static List<PackageBadVersion> PackageBadVersions { get; set; }
 
         /// <summary>
         /// Init all the things..
@@ -95,6 +106,237 @@ namespace lmt
             }
 
             LocalIpAddresses = string.Join(", ", ips.OrderBy(n => n));
+        }
+
+        /// <summary>
+        /// Get the first package matching the filename-pattern.
+        /// </summary>
+        /// <param name="filename">Filename to match.</param>
+        /// <returns>Package.</returns>
+        private static Package GetMatchingPackage(string filename)
+        {
+            Packages ??= Db.Packages
+                .Where(n => !n.Deleted.HasValue)
+                .ToList();
+
+            foreach (var package in Packages)
+            {
+                var patterns = package.GetFiles();
+
+                if (patterns == null ||
+                    patterns.Length == 0)
+                {
+                    continue;
+                }
+
+                var add = patterns
+                    .Any(pattern =>
+                        new Regex(pattern).IsMatch(filename));
+
+                if (add)
+                {
+                    return package;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Check if the entry and package represent a bad version.
+        /// </summary>
+        /// <param name="package">Package.</param>
+        /// <param name="entry">File entry.</param>
+        /// <param name="index">Index of folder to scan.</param>
+        /// <returns>Success.</returns>
+        private static bool IsBadVersion(Package package, FileEntry entry, int index)
+        {
+            if (package == null ||
+                entry == null)
+            {
+                return false;
+            }
+
+            PackageBadVersions ??= Db.PackageBadVersions
+                .Where(n => !n.Deleted.HasValue)
+                .ToList();
+
+            var fpl = PackageBadVersions
+                .Where(n => n.PackageId == package.Id)
+                .ToList();
+
+            if (!fpl.Any())
+            {
+                return false;
+            }
+
+            foreach (var fp in fpl)
+            {
+                //var ibv1 = true;
+                //var ibv2 = true;
+                //var ibv3 = true;
+                //var ibv4 = true;
+
+                bool? ibv1 = null;
+                bool? ibv2 = null;
+                bool? ibv3 = null;
+                bool? ibv4 = null;
+
+                Version v1;
+                Version v2;
+                int vc;
+
+                // Check FileVersionFrom.
+                if (fp.FileVersionFrom != null)
+                {
+                    ibv1 = true;
+
+                    try
+                    {
+                        v1 = new Version(entry.FileVersion);
+                        v2 = new Version(fp.FileVersionFrom);
+
+                        // > 0 = v1 is greater.
+                        // < 0 = v1 is lesser.
+                        // = 0 = v1 and v2 is equal.
+                        vc = v1.CompareTo(v2);
+
+                        if (vc <= 0)
+                        {
+                            ibv1 = false;
+                        }
+                    }
+                    catch
+                    {
+                        //
+                    }
+                }
+
+                // Check FileVersionTo.
+                if (fp.FileVersionTo != null)
+                {
+                    ibv2 = true;
+
+                    try
+                    {
+                        v1 = new Version(entry.FileVersion);
+                        v2 = new Version(fp.FileVersionTo);
+
+                        // > 0 = v1 is greater.
+                        // < 0 = v1 is lesser.
+                        // = 0 = v1 and v2 is equal.
+                        vc = v1.CompareTo(v2);
+
+                        if (vc > 0)
+                        {
+                            ibv2 = false;
+                        }
+                    }
+                    catch
+                    {
+                        //
+                    }
+                }
+
+                // Check ProductVersionFrom.
+                if (fp.ProductVersionFrom != null)
+                {
+                    ibv3 = true;
+
+                    try
+                    {
+                        v1 = new Version(entry.FileVersion);
+                        v2 = new Version(fp.ProductVersionFrom);
+
+                        // > 0 = v1 is greater.
+                        // < 0 = v1 is lesser.
+                        // = 0 = v1 and v2 is equal.
+                        vc = v1.CompareTo(v2);
+
+                        if (vc <= 0)
+                        {
+                            ibv3 = false;
+                        }
+                    }
+                    catch
+                    {
+                        //
+                    }
+                }
+
+                // Check ProductVersionTo.
+                if (fp.ProductVersionTo != null)
+                {
+                    ibv4 = true;
+
+                    try
+                    {
+                        v1 = new Version(entry.FileVersion);
+                        v2 = new Version(fp.ProductVersionTo);
+
+                        // > 0 = v1 is greater.
+                        // < 0 = v1 is lesser.
+                        // = 0 = v1 and v2 is equal.
+                        vc = v1.CompareTo(v2);
+
+                        if (vc > 0)
+                        {
+                            ibv4 = false;
+                        }
+                    }
+                    catch
+                    {
+                        //
+                    }
+                }
+
+                // If either the file or product version is within the limits, return true.
+                var retval = false;
+
+                // TODO: ProductVersion (ibv3 && ibv4)
+
+                // From is lesser than v, no upper limit.
+                if (ibv1.HasValue &&
+                    ibv1.Value &&
+                    !ibv2.HasValue)
+                {
+                    retval = true;
+                }
+
+                // From is lesser than v, to is larger.
+                else if (ibv1.HasValue &&
+                         ibv1.Value &&
+                         ibv2.HasValue &&
+                         ibv2.Value)
+                {
+                    retval = true;
+                }
+
+                // From has not limit, to is larger than v.
+                else if (!ibv1.HasValue &&
+                         ibv2.HasValue &&
+                         ibv2.Value)
+                {
+                    retval = true;
+                }
+
+                if (!retval)
+                {
+                    continue;
+                }
+
+                WriteError(
+                    "BAD PACKAGE",
+                    new Exception($"{package.Name} - FileVersion: from:{fp.FileVersionFrom ?? "*"}" +
+                                  $" - to:{fp.FileVersionTo ?? "*"}" +
+                                  $" - ProductVersion: from:{fp.ProductVersionFrom ?? "*"}" +
+                                  $" - to:{fp.ProductVersionTo ?? "*"}"),
+                    index);
+
+                return retval;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -171,9 +413,10 @@ namespace lmt
         /// <summary>
         /// Update db with information about this file and its origin.
         /// </summary>
+        /// <param name="index">Index of folder to scan.</param>
         /// <param name="info">General information about the file.</param>
         /// <param name="ver">Version information about the file.</param>
-        private static void ReportToDb(FileInfo info, FileVersionInfo ver)
+        private static void ReportToDb(int index, FileInfo info, FileVersionInfo ver)
         {
             var fileVersion = string.Format(
                     "{0}.{1}.{2}.{3}",
@@ -197,6 +440,17 @@ namespace lmt
                 throw new Exception($"Unable to get file path for {fileName}");
             }
 
+            // Get the first package matching the filename-pattern.
+            var package = GetMatchingPackage(fileName);
+
+            if (package == null)
+            {
+                WriteWarning(
+                    $"No package found for {fileName}",
+                    index);
+            }
+
+            // Get or create a new entry.
             var entry = Db.FileEntries
                             .FirstOrDefault(n => n.ServerName == Environment.MachineName &&
                                                  n.FilePath == filePath &&
@@ -223,6 +477,11 @@ namespace lmt
                             ProductVersionPrivate = ver.ProductPrivatePart
                         };
 
+            if (package != null)
+            {
+                entry.PackageId = package.Id;
+            }
+
             entry.LastScan = DateTimeOffset.Now;
 
             if (entry.Id == 0)
@@ -231,6 +490,14 @@ namespace lmt
             }
 
             Db.SaveChanges();
+
+            if (IsBadVersion(package, entry, index))
+            {
+                WriteError(
+                    "BAD VERSION",
+                    new Exception($"{entry.FileName} - FileVersion: {entry.FileVersion} - ProductVersion: {entry.ProductVersion}"),
+                    index);
+            }
         }
 
         /// <summary>
@@ -243,6 +510,7 @@ namespace lmt
             try
             {
                 ReportToDb(
+                    index,
                     new FileInfo(path),
                     FileVersionInfo.GetVersionInfo(path));
             }
@@ -296,30 +564,15 @@ namespace lmt
                 return;
             }
 
-            var top = Console.CursorTop;
-            var processed = 0;
-            var max = files.Length;
-
             Console.ForegroundColor = ConsoleColor.DarkGreen;
             Console.Write($"[{index}] ");
 
             Console.ResetColor();
-            Console.Write($"Files Processed: 0 of {max}");
+            Console.WriteLine($"Processing {files.Length} files..");
 
             foreach (var file in files)
             {
                 ScanFile(index, file);
-
-                processed++;
-
-                Console.CursorTop = top;
-                Console.CursorLeft = 0;
-
-                Console.ForegroundColor = ConsoleColor.DarkGreen;
-                Console.Write($"[{index}] ");
-
-                Console.ResetColor();
-                Console.Write($"Files Processed: {processed} of {max}");
             }
 
             Console.WriteLine();
@@ -345,14 +598,30 @@ namespace lmt
         /// <param name="index">Index of folder to scan.</param>
         private static void WriteError(Exception ex, int? index = null)
         {
+            WriteError(
+                null,
+                ex,
+                index);
+        }
+
+        /// <summary>
+        /// Write an exception to console.
+        /// </summary>
+        /// <param name="tag">Tag for type. Defaults to 'ERROR'.</param>
+        /// <param name="ex">Exception to write.</param>
+        /// <param name="index">Index of folder to scan.</param>
+        private static void WriteError(string tag, Exception ex, int? index = null)
+        {
             if (index.HasValue)
             {
                 Console.ForegroundColor = ConsoleColor.DarkGreen;
                 Console.Write($"[{index}] ");
             }
 
+            tag ??= "ERROR";
+
             Console.ForegroundColor = ConsoleColor.DarkRed;
-            Console.Write("[ERROR] ");
+            Console.Write($"[{tag}] ");
 
             Console.ResetColor();
             Console.WriteLine(ex?.Message);
@@ -362,7 +631,7 @@ namespace lmt
                 return;
             }
 
-            var pad = "        ";
+            var pad = $"[{tag}] ";
 
             if (index.HasValue)
             {
@@ -375,6 +644,26 @@ namespace lmt
             }
 
             Console.WriteLine($"{pad}{ex.InnerException.Message}");
+        }
+
+        /// <summary>
+        /// Write a warning to console.
+        /// </summary>
+        /// <param name="message">Message to write.</param>
+        /// <param name="index">Index of folder to scan.</param>
+        private static void WriteWarning(string message, int? index = null)
+        {
+            if (index.HasValue)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGreen;
+                Console.Write($"[{index}] ");
+            }
+
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.Write("[WARNING] ");
+
+            Console.ResetColor();
+            Console.WriteLine(message);
         }
     }
 }

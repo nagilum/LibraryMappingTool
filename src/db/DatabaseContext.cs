@@ -20,6 +20,10 @@ namespace lmt.db
 
         public DbSet<FileEntry> FileEntries { get; set; }
 
+        public DbSet<Package> Packages { get; set; }
+
+        public DbSet<PackageBadVersion> PackageBadVersions { get; set; }
+
         #endregion
     }
 }
