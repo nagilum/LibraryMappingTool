@@ -14,6 +14,8 @@ namespace lmt
 {
     public class Program
     {
+        #region Properties
+
         /// <summary>
         /// Loaded config.
         /// </summary>
@@ -40,11 +42,23 @@ namespace lmt
         private static List<PackageBadVersion> PackageBadVersions { get; set; }
 
         /// <summary>
+        /// Full path to the local log file.
+        /// </summary>
+        private static string LogFile { get; set; }
+
+        #endregion
+
+        /// <summary>
         /// Init all the things..
         /// </summary>
         /// <param name="args">Command-line arguments.</param>
         private static void Main(string[] args)
         {
+            // Figure out log file.
+            LogFile = Path.Combine(
+                Directory.GetCurrentDirectory(),
+                $"lmt-{DateTimeOffset.Now:yyyy-MM-dd-HH-mm-ss}-{DateTimeOffset.Now.Ticks}.log");
+
             // Disable the console cursor, for smoother refreshing.
             DisableCursor();
 
@@ -65,7 +79,12 @@ namespace lmt
 
             // Scan the available folders from loaded config.
             ScanFolders();
+
+            Console.WriteLine();
+            Console.WriteLine($"Wrote log to {LogFile}");
         }
+
+        #region Helper functions
 
         /// <summary>
         /// Disable the console cursor, for smoother refreshing.
@@ -172,11 +191,6 @@ namespace lmt
 
             foreach (var fp in fpl)
             {
-                //var ibv1 = true;
-                //var ibv2 = true;
-                //var ibv3 = true;
-                //var ibv4 = true;
-
                 bool? ibv1 = null;
                 bool? ibv2 = null;
                 bool? ibv3 = null;
@@ -245,7 +259,7 @@ namespace lmt
 
                     try
                     {
-                        v1 = new Version(entry.FileVersion);
+                        v1 = new Version(entry.ProductVersion);
                         v2 = new Version(fp.ProductVersionFrom);
 
                         // > 0 = v1 is greater.
@@ -271,7 +285,7 @@ namespace lmt
 
                     try
                     {
-                        v1 = new Version(entry.FileVersion);
+                        v1 = new Version(entry.ProductVersion);
                         v2 = new Version(fp.ProductVersionTo);
 
                         // > 0 = v1 is greater.
@@ -293,7 +307,9 @@ namespace lmt
                 // If either the file or product version is within the limits, return true.
                 var retval = false;
 
-                // TODO: ProductVersion (ibv3 && ibv4)
+                /*
+                 * FILE VERSION
+                 */
 
                 // From is lesser than v, no upper limit.
                 if (ibv1.HasValue &&
@@ -316,6 +332,35 @@ namespace lmt
                 else if (!ibv1.HasValue &&
                          ibv2.HasValue &&
                          ibv2.Value)
+                {
+                    retval = true;
+                }
+
+                /*
+                 * PRODUCT VERSION
+                 */
+
+                // From is lesser than v, no upper limit.
+                if (ibv3.HasValue &&
+                    ibv3.Value &&
+                    !ibv4.HasValue)
+                {
+                    retval = true;
+                }
+
+                // From is lesser than v, to is larger.
+                else if (ibv3.HasValue &&
+                         ibv3.Value &&
+                         ibv4.HasValue &&
+                         ibv4.Value)
+                {
+                    retval = true;
+                }
+
+                // From has not limit, to is larger than v.
+                else if (!ibv3.HasValue &&
+                         ibv4.HasValue &&
+                         ibv4.Value)
                 {
                     retval = true;
                 }
@@ -410,6 +455,10 @@ namespace lmt
             }
         }
 
+        #endregion
+
+        #region Scanning functions
+
         /// <summary>
         /// Update db with information about this file and its origin.
         /// </summary>
@@ -495,7 +544,7 @@ namespace lmt
             {
                 WriteError(
                     "BAD VERSION",
-                    new Exception($"{entry.FileName} - FileVersion: {entry.FileVersion} - ProductVersion: {entry.ProductVersion}"),
+                    new Exception($"{entry.FileName} - FileVersion: {entry.FileVersion} - ProductVersion: {entry.ProductVersion} - Path: {filePath}"),
                     index);
             }
         }
@@ -533,6 +582,8 @@ namespace lmt
             Console.ResetColor();
             Console.WriteLine($"Scanning {folder.Path}");
 
+            LogToDisk($"[{index}] Scanning {folder.Path}");
+
             string[] files;
 
             try
@@ -561,6 +612,8 @@ namespace lmt
                 Console.ResetColor();
                 Console.WriteLine("Files: 0 - Aborting!");
 
+                LogToDisk($"[{index}] Files: 0 - Aborting!");
+
                 return;
             }
 
@@ -569,6 +622,8 @@ namespace lmt
 
             Console.ResetColor();
             Console.WriteLine($"Processing {files.Length} files..");
+
+            LogToDisk($"[{index}] Processing {files.Length} files..");
 
             foreach (var file in files)
             {
@@ -588,6 +643,28 @@ namespace lmt
             foreach (var folder in LoadedConfig.Folders)
             {
                 ScanFolder(++index, folder);
+            }
+        }
+
+        #endregion
+
+        #region Log and Error functions
+
+        /// <summary>
+        /// Log a line to disk.
+        /// </summary>
+        /// <param name="message">Message to log.</param>
+        private static void LogToDisk(string message)
+        {
+            try
+            {
+                File.AppendAllText(
+                    LogFile,
+                    message + Environment.NewLine);
+            }
+            catch
+            {
+                //
             }
         }
 
@@ -612,10 +689,14 @@ namespace lmt
         /// <param name="index">Index of folder to scan.</param>
         private static void WriteError(string tag, Exception ex, int? index = null)
         {
+            var str = string.Empty;
+
             if (index.HasValue)
             {
                 Console.ForegroundColor = ConsoleColor.DarkGreen;
                 Console.Write($"[{index}] ");
+
+                str += $"[{index}] ";
             }
 
             tag ??= "ERROR";
@@ -625,6 +706,9 @@ namespace lmt
 
             Console.ResetColor();
             Console.WriteLine(ex?.Message);
+
+            str += $"[{tag}] {ex?.Message}";
+            LogToDisk(str);
 
             if (ex?.InnerException == null)
             {
@@ -644,6 +728,16 @@ namespace lmt
             }
 
             Console.WriteLine($"{pad}{ex.InnerException.Message}");
+
+            str = string.Empty;
+
+            if (index.HasValue)
+            {
+                str += $"[{index}] ";
+            }
+
+            str += $"[{tag}] {ex.InnerException.Message}";
+            LogToDisk(str);
         }
 
         /// <summary>
@@ -653,10 +747,14 @@ namespace lmt
         /// <param name="index">Index of folder to scan.</param>
         private static void WriteWarning(string message, int? index = null)
         {
+            var str = string.Empty;
+
             if (index.HasValue)
             {
                 Console.ForegroundColor = ConsoleColor.DarkGreen;
                 Console.Write($"[{index}] ");
+
+                str += $"[{index}] ";
             }
 
             Console.ForegroundColor = ConsoleColor.DarkYellow;
@@ -664,6 +762,11 @@ namespace lmt
 
             Console.ResetColor();
             Console.WriteLine(message);
+
+            str += $"[WARNING] {message}";
+            LogToDisk(str);
         }
+
+        #endregion
     }
 }
